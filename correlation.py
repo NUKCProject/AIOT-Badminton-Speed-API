@@ -63,6 +63,7 @@ for item in data_list:
         'gz_max': np.max(gz),
         'gz_min': np.min(gz),
         
+        'total_mean_abs': np.mean(ax) + np.mean(ay) + np.mean(az) + np.mean(gx) + np.mean(gy) + np.mean(gz),
         'speed': item['speed']
     }
     
@@ -89,4 +90,32 @@ corr_matrix = df_features.corr()
 plt.figure(figsize=(12, 10))
 sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', fmt='.2f')
 plt.title("Heatmap of correlation between features and speed")
+plt.show()
+
+# 6. 绘制散布图
+fig, axes = plt.subplots(2, 3, figsize=(30, 12))
+axes = axes.flatten()
+
+features_to_plot = ['ax_mean', 'ay_mean', 'az_mean', 'gx_mean', 'gy_mean', 'gz_mean']
+
+for i, feature in enumerate(features_to_plot):
+    sns.scatterplot(x=feature, y='speed', data=df_features, ax=axes[i])
+    axes[i].set_title(f'Scatter plot of {feature} vs Speed')
+    axes[i].set_xlabel(feature)
+    axes[i].set_ylabel('Speed')
+
+# Hide any unused subplots
+for j in range(len(features_to_plot), len(axes)):
+    fig.delaxes(axes[j])
+
+plt.subplots_adjust(hspace=0.6, wspace=0.4)
+plt.tight_layout()
+plt.show()
+
+# 7. 绘制六轴平均总和与速度的散布图
+plt.figure(figsize=(8, 6))
+sns.scatterplot(x='total_mean_abs', y='speed', data=df_features)
+plt.title('Scatter plot of Total Mean Abs vs Speed')
+plt.xlabel('Total Mean Abs')
+plt.ylabel('Speed')
 plt.show()
