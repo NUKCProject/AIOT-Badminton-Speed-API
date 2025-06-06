@@ -1,5 +1,6 @@
 import requests
 import numpy as np
+import json
 
 # API基礎URL
 BASE_URL = "http://localhost:8000"
@@ -185,6 +186,51 @@ def test_realistic_data():
         print(f"真實數據測試失敗: {e}")
         return False
 
+def test_batch_prediction_with_real_data():
+    """測試使用真實數據進行批量預測"""
+    print("\n=== 真實數據批量預測測試 ===")
+    
+    try:
+        with open('./data/smash_data.json', 'r', encoding='utf-8') as f:
+            all_smash_data = json.load(f)
+        
+        # 獲取前30條數據
+        real_data_batch = []
+        for entry in all_smash_data[:30]:
+            sensor_data = []
+            for frame in entry['waveform']:
+                sensor_data.append({
+                    "ax": frame["ax"],
+                    "ay": frame["ay"],
+                    "az": frame["az"],
+                    "gx": frame["gx"],
+                    "gy": frame["gy"],
+                    "gz": frame["gz"]
+                })
+            real_data_batch.append({"sensor_data": sensor_data})
+        
+        response = requests.post(
+            f"{BASE_URL}/predict_speed_batch",
+            json=real_data_batch,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        print(f"狀態碼: {response.status_code}")
+        
+        if response.status_code == 200:
+            results = response.json()
+            print(f"真實數據批量預測結果數量: {len(results)}")
+            for i, result in enumerate(results):
+                print(f"  樣本{i+1}: {result['predicted_speed']} km/h")
+            return True
+        else:
+            print(f"真實數據批量預測失敗: {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"真實數據批量請求失敗: {e}")
+        return False
+
 def main():
     """執行所有測試"""
     print("開始API測試...")
@@ -194,7 +240,8 @@ def main():
         ("速度預測", test_speed_prediction),
         ("無效數據處理", test_invalid_data),
         ("批量預測", test_batch_prediction),
-        ("真實數據測試", test_realistic_data)
+        ("真實數據測試", test_realistic_data),
+        ("真實數據批量預測", test_batch_prediction_with_real_data)
     ]
     
     results = {}
