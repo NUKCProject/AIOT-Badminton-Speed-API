@@ -234,7 +234,7 @@ plt.text(0.05, 0.95, f'R² = {r2:.3f}\nRMSE = {rmse:.1f}',
         bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
 
 plt.tight_layout()
-plt.savefig('model_results.png', dpi=300, bbox_inches='tight')
+plt.savefig('./ml_model/model_results.png', dpi=300, bbox_inches='tight')
 plt.show()
 
 # 10. 誤差分析 ------------------------------------------------------
@@ -256,16 +256,16 @@ plt.title('誤差 vs 真實值')
 plt.grid(True, alpha=0.3)
 
 plt.tight_layout()
-plt.savefig('error_analysis.png', dpi=300, bbox_inches='tight')
+plt.savefig('./ml_model/error_analysis.png', dpi=300, bbox_inches='tight')
 plt.show()
 
 # 11. 保存模型和預處理器 --------------------------------------------
-model.save('badminton_speed_predictor.h5')
-print("\n模型已保存為 'badminton_speed_predictor.h5'")
+model.save('./ml_model/badminton_speed_predictor.h5')
+print("\n模型已保存為 './ml_model/badminton_speed_predictor.h5'")
 
 import joblib
-joblib.dump(feature_scaler, 'feature_scaler.pkl')
-joblib.dump(target_scaler, 'target_scaler.pkl')
+joblib.dump(feature_scaler, './ml_model/feature_scaler.pkl')
+joblib.dump(target_scaler, './ml_model/target_scaler.pkl')
 print("預處理器已保存")
 
 # 12. 預測示例 ------------------------------------------------------
