@@ -1,26 +1,22 @@
 import numpy as np
 from scipy.signal import find_peaks, butter, filtfilt
-from scipy.stats import entropy
+from scipy.stats import entropy, weibull_min
 from sklearn.linear_model import LinearRegression
 import matplotlib.pyplot as plt
 import json
+from scipy.optimize import curve_fit
 
 class IMUSequencePseudoLabelGenerator:
-    def __init__(self, labeled_sequences):
-        """
-        初始化时序伪标签生成器
-        :param labeled_sequences: 已标记数据列表，格式 [{"sequence": [...], "speed": float}, ...]
-        """
-        self.labeled_sequences = labeled_sequences
-        self.mu_s = 138.88  # 基础球速均值 (km/h)
-        self.sigma_s = 40.12  # 基础球速标准差
-        self.alpha = 0.0  # 角速度-球速敏感系数
-        self.beta = 0.25  # 挥拍稳定性系数
+    def __init__(self, config):
+        self.weibull_c = config.get('weibull_c', 3.5)  # 形状参数
+        self.weibull_loc = config.get('weibull_loc', 50.0) # 位置参数
+        self.weibull_scale = config.get('weibull_scale', 200.0) # 尺度参数
+        self.alpha = config.get('alpha', 0.0) # 角速度对伪标签的影响因子
+        self.beta = config.get('beta', 0.0)  # 稳定性对伪标签的影响因子
+        self.min_speed = config.get('min_speed', 0.0)
+        self.max_speed = config.get('max_speed', 1000.0)
         self.g = 9.81  # 重力加速度
         self.fs = 100  # 采样频率 (Hz)，根据时间戳计算
-        
-        # 从标签数据校准模型参数
-        self._calibrate_model()
         
     def _calculate_fs(self, sequence):
         """从时间戳计算采样频率"""
@@ -31,43 +27,6 @@ class IMUSequencePseudoLabelGenerator:
         intervals = np.diff(timestamps)
         avg_interval = np.mean(intervals)
         return 1000 / avg_interval  # 转换为Hz
-    
-    def _calibrate_model(self):
-        """从已标记数据校准模型参数"""
-        # 提取特征和标签
-        features = []
-        speeds = []
-        
-        for data in self.labeled_sequences:
-            sequence = data["sequence"]
-            fs = self._calculate_fs(sequence)
-            
-            # 处理时序数据
-            processed = self.process_sequence(sequence, fs)
-            
-            if processed is not None:  # 确保处理成功
-                # 获取特征
-                features.append([
-                    processed['omega_eff'],
-                    processed['snr'],
-                    processed['stability']
-                ])
-                speeds.append(data["speed"])
-        
-        if len(features) < 3:
-            print("警告：标记数据不足，使用默认参数")
-            return
-            
-        # 拟合线性模型 v = k * omega + b
-        model = LinearRegression()
-        model.fit(np.array(features)[:, 0].reshape(-1, 1), np.array(speeds))
-        self.alpha = model.coef_[0]  # 斜率 k
-        
-        # 更新基础分布参数
-        self.mu_s = np.mean(speeds)
-        self.sigma_s = np.std(speeds)
-        
-        print(f"模型校准完成: μ={self.mu_s:.1f} km/h, σ={self.sigma_s:.1f} km/h, α={self.alpha:.2f} m/rad")
     
     def _butter_lowpass(self, data, cutoff, fs, order=2):
         """低通滤波器"""
@@ -227,48 +186,29 @@ class IMUSequencePseudoLabelGenerator:
             'impact_idx': impact_idx
         }
     
-    def generate_pseudo_label(self, sequence):
+    def generate_pseudo_label(self, features):
         """
         生成加权伪标签
-        :param sequence: IMU时序数据
+        :param features: 提取的特征数据 (字典)
         :return: 伪标签球速 (km/h)
         """
-        # 计算采样频率
-        fs = self._calculate_fs(sequence)
-        
-        # 处理时序数据
-        features = self.process_sequence(sequence, fs)
-        
-        if features is None:
-            print("无法处理该序列，使用默认值")
-            return self.mu_s
+        # 特征已在外部处理并传入，无需再次计算或处理 (Added for sync check)
         
         # print(f"特征提取: ω_eff={features['omega_eff']:.1f} rad/s, SNR={features['snr']:.1f}, Stability={features['stability']:.3f}")
         
-        # 3. 计算调整参数
-        # 均值调整: μ_adj = μ_s + α*(ω_eff - ω_bar)
-        # 注意：这里ω_bar是平均有效角速度，需要从校准数据中获取
-        # 为简化，我们使用固定基准值
-        omega_bar = 100.0  # 典型羽毛球杀球角速度基准值
-        mu_adj = self.mu_s + self.alpha * (features['omega_eff'] - omega_bar)
+        # 使用Weibull分布生成伪标签
+        # Weibull分布的参数c (形状), loc (位置), scale (尺度)
+        # 根据角速度和稳定性动态调整Weibull分布的尺度参数
+        # 确保alpha和beta参数在校准后被正确设置
+        # 这里的features['omega_eff']对应avg_angular_speed，features['stability']对应stability_score
+        scale_adj = self.weibull_scale * (1 + self.alpha * features['omega_eff']) * (1 - self.beta * features['stability'])
+        # 确保调整后的尺度参数为正值
+        scale_adj = np.maximum(0.1, scale_adj) # 避免尺度参数过小或为负
         
-        # 标准差调整: σ_adj = σ_s * β/(stability + γ)
-        gamma = 0.1  # 防止除零
-        sigma_adj = self.sigma_s * self.beta / (features['stability'] + gamma)
+        v_pseudo = weibull_min.rvs(self.weibull_c, loc=self.weibull_loc, scale=scale_adj, size=1)[0]
         
-        # SNR加权: 低信噪比时扩大分布范围
-        if features['snr'] < 10.0:
-            sigma_adj *= 1.8
-            print("低SNR警告: 扩大分布范围")
-        
-        # print(f"调整参数: μ_adj={mu_adj:.1f}, σ_adj={sigma_adj:.1f}")
-        
-        # 4. 生成伪标签
-        v_pseudo = np.random.normal(mu_adj, sigma_adj)
-        
-        # # 5. 物理约束 (羽毛球杀球合理范围)
-        # v_min, v_max = 60, 220
-        # v_pseudo = np.clip(v_pseudo, v_min, v_max)
+        # 确保伪标签不为负数 (Weibull分布自然非负，但保留此行以防万一或未来修改)
+        v_pseudo = np.clip(v_pseudo, 0, None)
         
         return v_pseudo
 
@@ -323,36 +263,117 @@ class IMUSequencePseudoLabelGenerator:
         plt.tight_layout()
         plt.show()
 
+    def load_pseudo_labels(self, input_path):
+        return np.load(input_path)
+
+    def calibrate_weibull_params(self, true_speeds, features_data):
+        # 定义一个函数，用于拟合Weibull分布的尺度参数
+        def weibull_scale_func(X, alpha, beta):
+            omega_eff, stability = X
+            return self.weibull_scale * (1 + alpha * omega_eff) * (1 - beta * stability)
+
+        # 提取特征数据
+        omega_eff_data = np.array([f['omega_eff'] for f in features_data])
+        stability_data = np.array([f['stability'] for f in features_data])
+
+        # 假设true_speeds是与features_data对应的真实速度值
+        # 我们需要从true_speeds中提取出对应的weibull_scale
+        # 这里简化处理，直接使用true_speeds作为目标值，实际应用中可能需要更复杂的统计方法
+        # 例如，对每个(omega_eff, stability)组合下的true_speeds进行Weibull拟合，提取其scale参数
+        # 为了演示，我们暂时假设true_speeds的均值可以作为scale的近似
+        # 实际校准时，需要根据true_speeds的分布来估计weibull_scale
+        # 这里需要根据实际的true_speeds和features_data来构建拟合的目标值
+        # 假设我们已经有了每个样本对应的“目标尺度”target_scales
+        # target_scales = [weibull_min.fit(speeds_for_this_feature_combo)[2] for speeds_for_this_feature_combo in grouped_true_speeds]
+        
+        # 暂时使用一个简化的目标值，实际应用中需要根据真实数据的分布来确定
+        # 比如，如果true_speeds是每个样本的速度，我们可以尝试拟合一个整体的weibull_scale
+        # 或者，如果true_speeds是分组后的速度，可以计算每组的weibull_scale
+        # 这里为了让curve_fit能运行，我们假设true_speeds的某个统计量与scale_adj相关
+        # 这是一个简化的例子，实际校准需要更严谨的统计方法
+        target_scales = true_speeds # 这是一个占位符，需要根据实际数据来计算
+
+        # 使用curve_fit拟合alpha和beta
+        # 初始猜测值可以根据经验设定
+        initial_guess = [self.alpha, self.beta]
+        try:
+            # 确保X是二维数组，第一列是omega_eff，第二列是stability
+            popt, pcov = curve_fit(weibull_scale_func, (omega_eff_data, stability_data), target_scales, p0=initial_guess)
+            self.alpha = popt[0]
+            self.beta = popt[1]
+            print(f"Weibull参数校准完成：alpha={self.alpha:.4f}, beta={self.beta:.4f}")
+        except RuntimeError as e:
+            print(f"Weibull参数校准失败: {e}")
+            print("请检查输入数据和初始猜测值。")
+
+    def plot_pseudo_label_distribution(self, pseudo_labels, title="伪标签速度分布"):
+        plt.figure(figsize=(12, 6))
+        
+        plt.subplot(1, 2, 1)
+        sns.histplot(pseudo_labels, kde=True, bins=30)
+        plt.title(f'{title} - 直方图')
+        plt.xlabel('速度 (km/h)')
+        plt.ylabel('频数')
+        
+        plt.subplot(1, 2, 2)
+        sns.boxplot(y=pseudo_labels)
+        plt.title(f'{title} - 箱线图')
+        plt.ylabel('速度 (km/h)')
+        
+        plt.tight_layout()
+        plt.show()
+
 # ====================== 使用示例 ======================
 if __name__ == "__main__":
-    # # 加载数据（这里使用您提供的示例数据）
-    # sequence = [
-    #     {'ts': 1748565104764, 'ax': -0.03660000115633011, 'ay': 1.1141040325164795, 'az': -0.045871999114751816, 'gx': 73.5, 'gy': 29.75, 'gz': -167.5800018310547, 'mic_level': 74, 'mic_peak': 26638},
-    #     # ... 其他数据点 ...
-    #     {'ts': 1748565106019, 'ax': 1.4044640064239502, 'ay': 0.5328959822654724, 'az': 0.28596800565719604, 'gx': 349.8599853515625, 'gy': 251.86000061035156, 'gz': 78.81999969482422, 'mic_level': 156, 'mic_peak': 26638}
-    # ]
-    
-    # # 模拟已标记数据 (实际需真实数据)
-    # labeled_sequences = [
-    #     {"sequence": sequence, "speed": 305},  # 假设这是已标记数据
-    #     # 添加更多已标记序列...
-    # ]
-
     with open("./data/smash_data_real_label.json", "r") as f:
         data = json.load(f)
 
     labeled_sequences = [{"sequence":item['waveform'], "speed": item["speed"]} for item in data if item["speed"]]
 
-    # 初始化生成器 (使用已标记数据校准)
-    generator = IMUSequencePseudoLabelGenerator(labeled_sequences)
-    
-    # 为未标记数据生成伪标签
+    # 定义配置字典
+    config = {
+        'weibull_c': 3.5,
+        'weibull_loc': 50.0,
+        'weibull_scale': 200.0,
+        'alpha': 0.0,
+        'beta': 0.0,
+        'min_speed': 0.0,
+        'max_speed': 1000.0
+    }
+
+    # 初始化生成器
+    generator = IMUSequencePseudoLabelGenerator(config)
+
+    # 收集用于校准的数据
+    true_speeds = []
+    features_for_calibration = []
+
+    for item in labeled_sequences:
+        sequence = item["sequence"]
+        true_speed = item["speed"]
+        processed_features = generator.process_sequence(sequence)
+        if processed_features is not None:
+            true_speeds.append(true_speed)
+            features_for_calibration.append(processed_features)
+
+    # 校准Weibull分布的alpha和beta参数
+    if len(true_speeds) > 0:
+        generator.calibrate_weibull_params(np.array(true_speeds), features_for_calibration)
+
+    # 为所有数据生成伪标签 (包括已标记和未标记)
     for i, item in enumerate(data):
-        if(item["speed"] == None):
-            sequence = item["waveform"]
-            pseudo_speed = generator.generate_pseudo_label(sequence)
-            # print(f"生成的伪标签球速: {pseudo_speed:.1f} km/h\n")
-            data[i]['speed'] = float(pseudo_speed)
+        sequence = item["waveform"]
+        processed_features = generator.process_sequence(sequence)
+        
+        if processed_features is not None:
+            # 如果是未标记数据，或者需要重新生成伪标签
+            if item["speed"] is None:
+                pseudo_speed = generator.generate_pseudo_label(processed_features)
+                data[i]['speed'] = float(pseudo_speed)
+        else:
+            print(f"警告: 无法处理序列 {i}，跳过伪标签生成。")
+            # 可以选择给一个默认值或者标记为无效
+            # data[i]['speed'] = -1.0 # 示例：标记为无效值
     
     with open("./data/smash_data_pseudo_label.json", "w") as f:
         json.dump(data, f)
