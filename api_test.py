@@ -3,7 +3,7 @@ import numpy as np
 import json
 
 # API基礎URL
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8080"
 
 def test_health_check():
     """測試健康檢查"""
@@ -267,7 +267,7 @@ def main():
 
 if __name__ == "__main__":
     # 確保API服務正在運行
-    print("請確保API服務已在 http://localhost:8000 上運行")
+    print(f"請確保API服務已在 {BASE_URL} 上運行")
     print("運行命令: python main.py")
     input("按Enter鍵開始測試...")
     

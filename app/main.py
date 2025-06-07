@@ -7,10 +7,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 from typing import List
 
-from models.schemas import SensorFrame, PredictionRequest, PredictionResponse, HealthResponse
-from services.prediction_service import preprocess_sensor_data, validate_sensor_data_range
-from core import config
-from core.config import lifespan
+from app.models.schemas import SensorFrame, PredictionRequest, PredictionResponse, HealthResponse
+from app.services.prediction_service import preprocess_sensor_data, validate_sensor_data_range
+from app.core import config
+from app.core.config import lifespan
 
 # 創建FastAPI應用
 app = FastAPI(

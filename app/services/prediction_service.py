@@ -3,8 +3,8 @@ import numpy as np
 from fastapi import HTTPException
 import logging
 
-from models.schemas import SensorFrame
-from core import config
+from app.models.schemas import SensorFrame
+from app.core import config
 
 logger = logging.getLogger(__name__)
 
